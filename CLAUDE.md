@@ -68,6 +68,14 @@ Desde Linux (sesiones en la nube) se puede comprobar el backend con
 `cargo check --target x86_64-pc-windows-msvc` (no enlaza ni ejecuta). Para probar como admin desde una terminal normal:
 `Start-Process cmd -Verb RunAs -ArgumentList '/c probe.exe storage > out.txt'`.
 
+## Git
+
+- Commits y PR **sin marca de Claude**: nada de `Co-Authored-By`, enlaces de
+  sesión ni "Generated with Claude Code" (lo pidió el usuario).
+- Autor y committer: `FaberGomezDev <faber_gomez@outlook.com>`, como los
+  commits del usuario (configúralo con `git config user.name/user.email` en
+  el clon si el entorno trae otra identidad).
+
 ## Estructura
 
 ```
