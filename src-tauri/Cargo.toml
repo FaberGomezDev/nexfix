@@ -1,0 +1,50 @@
+[package]
+name = "nexfix"
+version = "1.0.0"
+description = "NexFix - análisis, limpieza y mantenimiento para PC gamer"
+authors = ["NexFix"]
+edition = "2021"
+
+[lib]
+name = "nexfix_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.1", features = [] }
+
+[dependencies]
+glob = "0.3.4"
+parking_lot = "0.12.5"
+rayon = "1.12.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sysinfo = { version = "0.39.6", default-features = false, features = ["system", "disk"] }
+tauri = { version = "2.12.1", features = [] }
+tauri-plugin-dialog = "2.8.1"
+trash = "5.2.9"
+winreg = "0.56.0"
+wmi = "0.18.4"
+
+[dependencies.windows-sys]
+version = "0.61.2"
+features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+]
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true
