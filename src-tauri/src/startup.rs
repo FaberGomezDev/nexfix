@@ -80,6 +80,22 @@ fn sources() -> Vec<Source> {
     v
 }
 
+/// Where a startup item lives, for the security scan's removal steps.
+pub enum Location {
+    Registry { machine: bool, subkey: &'static str, name: String },
+    File(PathBuf),
+}
+
+pub fn location(id: &str) -> Option<Location> {
+    let (key_id, name) = id.split_once('|')?;
+    let src = sources().into_iter().find(|s| s.key == key_id)?;
+    match (src.run_path, src.folder) {
+        (Some(subkey), _) => Some(Location::Registry { machine: src.machine, subkey, name: name.to_string() }),
+        (None, Some(folder)) => Some(Location::File(folder.join(name))),
+        _ => None,
+    }
+}
+
 fn root(machine: bool) -> RegKey {
     RegKey::predef(if machine { HKEY_LOCAL_MACHINE } else { HKEY_CURRENT_USER })
 }

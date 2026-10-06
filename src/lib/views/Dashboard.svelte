@@ -5,15 +5,16 @@
   import Ring from "../components/Ring.svelte";
   import { bytes, bytesDecimal, duration } from "../format";
   import { buildInsights, healthScore, type Level } from "../insights";
-  import { app, go, loadStartup, loadStorage, loadSystem, loadTweaks, toastError } from "../state.svelte";
+  import { app, go, loadSecurity, loadStartup, loadStorage, loadSystem, loadTweaks, toastError } from "../state.svelte";
 
   let { active }: { active: boolean } = $props();
 
   let live = $state<LiveStats | null>(null);
   let loading = $state(true);
   let refreshing = $state(false);
+  let sortBy = $state<"memory" | "cpu" | "gpu">("memory");
 
-  const insights = $derived(buildInsights(app.system, app.storage, app.tweaks, app.junk, app.startup));
+  const insights = $derived(buildInsights(app.system, app.storage, app.tweaks, app.junk, app.startup, app.security));
   const score = $derived(healthScore(insights));
   const issues = $derived(insights.filter((i) => i.level === "bad" || i.level === "warn").length);
   const scoreColor = $derived(score >= 85 ? "var(--ok)" : score >= 65 ? "var(--warn)" : "var(--bad)");
@@ -29,6 +30,8 @@
 
   async function loadAll(force = false) {
     refreshing = true;
+    // The security scan samples processes for ~2 s: it fills in on its own.
+    loadSecurity(force).catch(() => {});
     try {
       await Promise.all([
         loadSystem(force),
@@ -103,6 +106,7 @@
           <div class="row wrap" style="margin-top:14px">
             <button class="btn grad" onclick={() => go("cleaner")}><Icon name="sparkles" size={16} /> Limpiar</button>
             <button class="btn" onclick={() => go("analyzer")}><Icon name="pie" size={16} /> Analizar espacio</button>
+            <button class="btn" onclick={() => go("security")}><Icon name="bug" size={16} /> Seguridad</button>
             <button class="btn" onclick={() => go("maintenance")}><Icon name="wrench" size={16} /> Mantenimiento</button>
           </div>
         </div>
@@ -124,6 +128,12 @@
           <Ring value={memPct} size={92} thickness={9} color="var(--violet)" label={live ? `${Math.round(memPct)}%` : "—"} sub="RAM" />
           <span class="muted small">{live ? `${bytes(live.mem_used)} / ${bytes(live.mem_total, 0)}` : ""}</span>
         </div>
+        {#if live?.gpu_total != null}
+          <div class="ring-col">
+            <Ring value={live.gpu_total} size={92} thickness={9} color="var(--teal)" label={`${Math.round(live.gpu_total)}%`} sub="GPU" />
+            <span class="muted small ellipsis" style="max-width:110px">{live.top_gpu[0] ? live.top_gpu[0].name : "En reposo"}</span>
+          </div>
+        {/if}
       </div>
       {#if live}
         <div class="cores" title="Uso por hilo">
@@ -206,23 +216,35 @@
       <div class="card-head pad">
         <div class="icon-box"><Icon name="layers" size={17} /></div>
         <h2>Lo que más consume</h2>
+        <div class="tabs mini">
+          <button class:active={sortBy === "memory"} onclick={() => (sortBy = "memory")}>RAM</button>
+          <button class:active={sortBy === "cpu"} onclick={() => (sortBy = "cpu")}>CPU</button>
+          <button class:active={sortBy === "gpu"} onclick={() => (sortBy = "gpu")}>GPU</button>
+        </div>
       </div>
       {#if live}
+        {@const list = sortBy === "cpu" ? live.top_cpu : sortBy === "gpu" ? live.top_gpu : live.top_memory}
         <table class="table procs">
-          <thead><tr><th>Proceso</th><th class="num">RAM</th><th class="num">CPU</th></tr></thead>
+          <thead><tr><th>Proceso</th><th class="num">RAM</th><th class="num">CPU</th><th class="num">GPU</th></tr></thead>
           <tbody>
-            {#each live.top_memory as p}
+            {#each list as p}
               <tr>
                 <td class="ellipsis" style="max-width:180px">
                   {p.name}{#if p.count > 1}<span class="muted small"> ×{p.count}</span>{/if}
                 </td>
                 <td class="num">{bytes(p.memory)}</td>
                 <td class="num">{p.cpu.toLocaleString("es-ES", { maximumFractionDigits: 1 })} %</td>
+                <td class="num">{p.gpu >= 0.5 ? `${p.gpu.toLocaleString("es-ES", { maximumFractionDigits: 0 })} %` : "—"}</td>
               </tr>
+            {:else}
+              <tr><td colspan="4" class="muted">{sortBy === "gpu" ? "Ningún proceso está usando la GPU ahora mismo." : "Sin datos."}</td></tr>
             {/each}
           </tbody>
         </table>
-        <p class="muted small pad">Cierra lo que no uses antes de jugar: navegadores y editores suelen ser los que más RAM ocupan.</p>
+        <p class="muted small pad">
+          Cierra lo que no uses antes de jugar. Si algo usa la GPU sin que tengas nada abierto, revísalo en
+          <button class="link" onclick={() => go("security")}>Seguridad</button>.
+        </p>
       {:else}
         <div class="stack pad">{#each Array(6) as _}<div class="skeleton" style="height:20px"></div>{/each}</div>
       {/if}
@@ -397,6 +419,19 @@
   .procs th {
     padding-left: 18px;
     padding-right: 18px;
+  }
+  .tabs.mini button {
+    height: 24px;
+    padding: 0 10px;
+    font-size: 12px;
+  }
+  .link {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--accent);
+    cursor: pointer;
+    font: inherit;
   }
   @media (max-width: 1180px) {
     .top,

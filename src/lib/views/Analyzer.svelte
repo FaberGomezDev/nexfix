@@ -24,7 +24,7 @@
   import Toggle from "../components/Toggle.svelte";
   import Treemap, { type TreemapItem } from "../components/Treemap.svelte";
   import { bytes, date, ms, num, pct } from "../format";
-  import { app, ask, loadStorage, toast, toastError } from "../state.svelte";
+  import { app, ask, go, loadStorage, toast, toastError } from "../state.svelte";
 
   let scanId = $state<number | null>(null);
   let scanning = $state(false);
@@ -270,6 +270,21 @@
         <span class="spacer"></span>
         <button class="btn ghost sm" onclick={() => api.reveal(listing!.path)}><Icon name="external" size={14} /> Abrir en el Explorador</button>
       </div>
+
+      {#if /\\microsoft\\windows\\containers/i.test(listing.path) || listing.dirs.some((d) => d.skipped)}
+        <div class="callout info" style="margin-bottom:12px">
+          <Icon name="info" size={18} />
+          <div style="flex:1">
+            <strong>Capas de Windows Sandbox y contenedores</strong> (ProgramData\Microsoft\Windows\Containers). Casi todo son enlaces duros a
+            archivos de Windows que ya existen, así que ocupan mucho menos de lo que aparentan; por eso NexFix no las recorre. No las borres a
+            mano: Windows las protege, apenas liberarías espacio y Windows Sandbox podría dejar de funcionar. Si no usas Windows Sandbox,
+            desactívalo y reinicia: así es como Windows las retira.
+          </div>
+          <button class="btn sm" onclick={() => { app.taskRequest = { id: "sandbox_off", drive: null }; go("maintenance"); }}>
+            Desactivar Windows Sandbox
+          </button>
+        </div>
+      {/if}
 
       <div class="folder-view">
         <section class="card map-card" class:dim={loadingList}>

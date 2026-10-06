@@ -1,6 +1,15 @@
-import { api, errText, type JunkCategory, type StartupItem, type StorageInfo, type SystemInfo, type Tweaks } from "./api";
+import {
+  api,
+  errText,
+  type JunkCategory,
+  type SecurityReport,
+  type StartupItem,
+  type StorageInfo,
+  type SystemInfo,
+  type Tweaks,
+} from "./api";
 
-export type View = "dashboard" | "hardware" | "storage" | "cleaner" | "analyzer" | "optimize" | "maintenance";
+export type View = "dashboard" | "hardware" | "storage" | "cleaner" | "analyzer" | "security" | "optimize" | "maintenance";
 
 export const app = $state({
   view: "dashboard" as View,
@@ -10,6 +19,7 @@ export const app = $state({
   tweaks: null as Tweaks | null,
   startup: null as StartupItem[] | null,
   junk: null as JunkCategory[] | null,
+  security: null as SecurityReport | null,
   /** Set by other views to ask the analyzer to scan a path. */
   analyzeRequest: null as string | null,
   /** Set by other views to pre-select a maintenance task. */
@@ -49,6 +59,11 @@ export function loadTweaks(force = false) {
 export function loadStartup(force = false) {
   if (app.startup && !force) return Promise.resolve(app.startup);
   return once("startup", async () => (app.startup = await api.startupList()));
+}
+
+export function loadSecurity(force = false) {
+  if (app.security && !force) return Promise.resolve(app.security);
+  return once("security", async () => (app.security = await api.securityScan()));
 }
 
 // ---------- Toasts ----------
@@ -98,7 +113,7 @@ export function closeDialog(result: boolean) {
 export async function relaunchAsAdmin() {
   const ok = await ask({
     title: "Reiniciar como administrador",
-    body: "NexFix se cerrará y Windows te pedirá permiso para abrirlo con privilegios de administrador. Así podrás leer el SMART completo del M.2, limpiar archivos del sistema y ejecutar las tareas de mantenimiento.",
+    body: "NexFix se cerrará y Windows te pedirá permiso para abrirlo con privilegios de administrador. Así podrás leer el SMART completo del M.2, limpiar archivos del sistema, ejecutar las tareas de mantenimiento y hacer un análisis de seguridad completo (tareas programadas, servicios, exclusiones del antivirus).",
     confirm: "Reiniciar",
   });
   if (!ok) return;

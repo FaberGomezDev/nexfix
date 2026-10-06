@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::io::Read;
+use std::path::PathBuf;
 use std::process::{Child, Stdio};
 use std::sync::Arc;
 
@@ -90,6 +91,51 @@ pub fn tasks() -> Vec<TaskDef> {
             category: "Windows",
         },
         TaskDef {
+            id: "sandbox_off",
+            name: "Desactivar Windows Sandbox (capas de contenedores)",
+            description: "Quita la característica «Espacio aislado de Windows». Es la forma correcta de liberar ProgramData\\Microsoft\\Windows\\Containers: no borres esas carpetas a mano. Se puede volver a activar en «Características de Windows». Requiere reiniciar.",
+            admin: true,
+            needs_drive: false,
+            duration: "1-3 min",
+            category: "Windows",
+        },
+        TaskDef {
+            id: "defender_quick",
+            name: "Análisis rápido de Microsoft Defender",
+            description: "Revisa la memoria, los procesos en ejecución y los lugares donde se esconde el malware (inicio, carpetas del sistema).",
+            admin: true,
+            needs_drive: false,
+            duration: "2-10 min",
+            category: "Seguridad",
+        },
+        TaskDef {
+            id: "defender_full",
+            name: "Análisis completo de Microsoft Defender",
+            description: "Analiza todos los archivos de todas las unidades. Úsalo si sospechas de malware; puedes seguir usando el PC.",
+            admin: true,
+            needs_drive: false,
+            duration: "30 min - varias horas",
+            category: "Seguridad",
+        },
+        TaskDef {
+            id: "defender_update",
+            name: "Actualizar firmas de Microsoft Defender",
+            description: "Descarga las últimas definiciones de amenazas antes de analizar.",
+            admin: true,
+            needs_drive: false,
+            duration: "< 1 min",
+            category: "Seguridad",
+        },
+        TaskDef {
+            id: "defender_offline",
+            name: "Análisis sin conexión de Microsoft Defender",
+            description: "Reinicia el PC y analiza antes de que arranque Windows: elimina malware que se protege mientras Windows está en marcha (rootkits, mineros persistentes). Guarda tu trabajo antes: el reinicio es inmediato.",
+            admin: true,
+            needs_drive: false,
+            duration: "~15 min (con reinicio)",
+            category: "Seguridad",
+        },
+        TaskDef {
             id: "flush_dns",
             name: "Vaciar caché DNS",
             description: "Soluciona problemas de conexión a servidores de juegos tras cambios de IP o DNS.",
@@ -99,6 +145,30 @@ pub fn tasks() -> Vec<TaskDef> {
             category: "Red",
         },
     ]
+}
+
+/// Newest `MpCmdRun.exe`: the platform folder in ProgramData is updated by
+/// Defender itself; Program Files keeps the version shipped with Windows.
+pub fn mpcmdrun() -> Option<PathBuf> {
+    let platform = crate::util::env_path("ProgramData")?.join(r"Microsoft\Windows Defender\Platform");
+    let mut best: Option<(Vec<u64>, PathBuf)> = None;
+    if let Ok(dirs) = std::fs::read_dir(&platform) {
+        for d in dirs.flatten() {
+            let exe = d.path().join("MpCmdRun.exe");
+            if !exe.is_file() {
+                continue;
+            }
+            let name = d.file_name().to_string_lossy().to_string();
+            let ver: Vec<u64> = name.split(['.', '-']).map(|p| p.parse().unwrap_or(0)).collect();
+            if best.as_ref().is_none_or(|(b, _)| ver > *b) {
+                best = Some((ver, exe));
+            }
+        }
+    }
+    best.map(|(_, p)| p).or_else(|| {
+        let exe = crate::util::env_path("ProgramFiles")?.join(r"Windows Defender\MpCmdRun.exe");
+        exe.is_file().then_some(exe)
+    })
 }
 
 fn command_for(id: &str, drive: Option<&str>) -> Result<(String, Vec<String>), String> {
@@ -121,6 +191,23 @@ fn command_for(id: &str, drive: Option<&str>) -> Result<(String, Vec<String>), S
         "dism_analyze" => ("DISM.exe".into(), v(&["/Online", "/Cleanup-Image", "/AnalyzeComponentStore"])),
         "dism_cleanup" => ("DISM.exe".into(), v(&["/Online", "/Cleanup-Image", "/StartComponentCleanup"])),
         "flush_dns" => ("ipconfig.exe".into(), v(&["/flushdns"])),
+        "sandbox_off" => (
+            "DISM.exe".into(),
+            v(&["/Online", "/Disable-Feature", "/FeatureName:Containers-DisposableClientVM", "/NoRestart"]),
+        ),
+        "defender_quick" | "defender_full" | "defender_update" => {
+            let exe = mpcmdrun().ok_or("No se encontró Microsoft Defender (MpCmdRun.exe)")?;
+            let args = match id {
+                "defender_quick" => v(&["-Scan", "-ScanType", "1"]),
+                "defender_full" => v(&["-Scan", "-ScanType", "2"]),
+                _ => v(&["-SignatureUpdate"]),
+            };
+            (exe.to_string_lossy().into_owned(), args)
+        }
+        "defender_offline" => (
+            "powershell.exe".into(),
+            v(&["-NoProfile", "-NonInteractive", "-Command", "Start-MpWDOScan"]),
+        ),
         _ => return Err("Tarea desconocida".into()),
     })
 }

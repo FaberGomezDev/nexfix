@@ -15,6 +15,13 @@
   let consoleEl = $state<HTMLDivElement | null>(null);
 
   const ROUTINE = ["dism_restore", "sfc", "retrim", "chkdsk"];
+  /** Tasks with side effects beyond the PC staying as it is. */
+  const CONFIRM: Record<string, string> = {
+    defender_offline:
+      "El PC se reiniciará en unos segundos sin más avisos y Microsoft Defender analizará el disco antes de que arranque Windows (unos 15 minutos). Guarda y cierra todo lo que tengas abierto.",
+    sandbox_off:
+      "Se desactivará la característica «Espacio aislado de Windows» (Windows Sandbox). Después de reiniciar, Windows deja de mantener sus capas en ProgramData\\Microsoft\\Windows\\Containers. Puedes volver a activarla en «Activar o desactivar las características de Windows».",
+  };
   const running = $derived(Object.entries(status).some(([, s]) => s === "running"));
 
   const unlisteners: (() => void)[] = [];
@@ -67,6 +74,11 @@
     if (!t) return;
     if (t.admin && !app.admin) {
       relaunchAsAdmin();
+      return;
+    }
+    const warn = CONFIRM[id];
+    if (warn && !(await ask({ title: t.name, body: warn, confirm: "Continuar", danger: true }))) {
+      queue = [];
       return;
     }
     logs[id] = { lines: [], replace: false };

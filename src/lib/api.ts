@@ -72,6 +72,7 @@ export interface ProcInfo {
   count: number;
   memory: number;
   cpu: number;
+  gpu: number;
 }
 export interface LiveStats {
   cpu_total: number;
@@ -84,6 +85,8 @@ export interface LiveStats {
   process_count: number;
   top_memory: ProcInfo[];
   top_cpu: ProcInfo[];
+  top_gpu: ProcInfo[];
+  gpu_total: number | null;
   uptime_secs: number;
 }
 export interface NvmeHealth {
@@ -283,6 +286,109 @@ export interface StartupItem {
   enabled: boolean;
 }
 
+export type ThreatLevel = "info" | "medium" | "high" | "critical";
+export type FindingKind = "process" | "startup" | "task" | "service" | "wmi" | "exclusion" | "hosts" | "file" | "defender";
+export type SignState = "trusted" | "unsigned" | "invalid" | "unknown";
+export interface Finding {
+  id: string;
+  key: string;
+  kind: FindingKind;
+  level: ThreatLevel;
+  score: number;
+  category: "mineria" | "malware" | "persistencia" | "proteccion" | "disco";
+  title: string;
+  summary: string;
+  reasons: string[];
+  path: string | null;
+  command: string | null;
+  pids: number[];
+  signer: string | null;
+  sign_state: SignState | null;
+  cpu: number | null;
+  gpu: number | null;
+  vram: number | null;
+  write_rate: number | null;
+  size: number | null;
+  mtime: number | null;
+  plan: string[];
+  needs_admin: boolean;
+  ignored: boolean;
+}
+export interface ProcRow {
+  name: string;
+  path: string | null;
+  pids: number[];
+  cpu: number;
+  gpu: number;
+  compute: boolean;
+  vram: number;
+  memory: number;
+  write_rate: number;
+  written_total: number;
+  windowed: boolean;
+  signer: string | null;
+  sign_state: SignState | null;
+  flagged: boolean;
+}
+export interface AvStatus {
+  products: { name: string; enabled: boolean; up_to_date: boolean; defender: boolean }[];
+  defender: {
+    service: boolean | null;
+    antivirus: boolean | null;
+    realtime: boolean | null;
+    tamper: boolean | null;
+    mode: string;
+    signature_age: number | null;
+    signature_date: string | null;
+    quick_scan_age: number | null;
+    full_scan_age: number | null;
+  } | null;
+  detections: { name: string; severity: string; status: string; active: boolean; resources: string[]; date: string | null }[];
+  exclusions: { kind: "path" | "process" | "extension"; value: string; policy: boolean; risk: string | null }[];
+  exclusions_readable: boolean;
+}
+export interface DiskActivity {
+  days: number;
+  recent_bytes: number;
+  scanned_files: number;
+  growth: { path: string; bytes: number; files: number; note: string | null }[];
+  big_files: { path: string; size: number; mtime: number; note: string | null; suspicious: boolean }[];
+}
+export interface SecurityReport {
+  findings: Finding[];
+  resources: ProcRow[];
+  cpu_total: number;
+  gpu_total: number | null;
+  disk_write_rate: number;
+  av: AvStatus;
+  disk: DiskActivity;
+  checked: { processes: number; startup: number; tasks: number | null; services: number; wmi: number | null; hosts: boolean };
+  is_admin: boolean;
+  elapsed_ms: number;
+}
+export interface FixReport {
+  items: { id: string; title: string; ok: boolean; steps: { text: string; ok: boolean; message: string }[] }[];
+  fixed: number;
+  failed: number;
+  reboot: boolean;
+  freed: number;
+}
+export interface QEntry {
+  id: string;
+  kind: "file" | "reg" | "task" | "service" | "exclusion" | "hosts";
+  title: string;
+  original: string;
+  stored: string | null;
+  size: number;
+  date: number;
+  admin: boolean;
+}
+export interface DefenderScan {
+  threat: boolean;
+  summary: string;
+  output: string;
+}
+
 // ---------- Commands (arguments are camelCase on the JS side) ----------
 
 export const api = {
@@ -316,6 +422,15 @@ export const api = {
   powerPlanAddUltimate: () => invoke<void>("power_plan_add_ultimate"),
   startupList: () => invoke<StartupItem[]>("startup_list"),
   startupSet: (id: string, enabled: boolean) => invoke<void>("startup_set", { id, enabled }),
+
+  securityScan: () => invoke<SecurityReport>("security_scan"),
+  securityFix: (ids: string[]) => invoke<FixReport>("security_fix", { ids }),
+  securityIgnore: (key: string, ignored: boolean) => invoke<void>("security_ignore", { key, ignored }),
+  quarantineList: () => invoke<QEntry[]>("quarantine_list"),
+  quarantineRestore: (id: string) => invoke<string>("quarantine_restore", { id }),
+  quarantineDelete: (id: string) => invoke<void>("quarantine_delete", { id }),
+  defenderScanFile: (path: string) => invoke<DefenderScan>("defender_scan_file", { path }),
+  openWindowsSecurity: () => invoke<void>("open_windows_security"),
 };
 
 export function on<T>(event: string, cb: (payload: T) => void): Promise<UnlistenFn> {

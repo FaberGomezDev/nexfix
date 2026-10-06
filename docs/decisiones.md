@@ -77,3 +77,58 @@ Formato: contexto → decisión → consecuencias. Añadir nuevas al final.
 ## D9 · TypeScript 6 (2026-10-05)
 
 - `svelte-check` 4.7 exige TS ^5 || ^6; TS 7 rompe la comprobación.
+
+## D10 · Seguridad por heurística explicable, no por firmas (2026-10-06)
+
+- **Contexto**: el usuario pidió detectar y eliminar malware de minería que
+  consuma GPU/CPU y malware que llene el disco.
+- **Decisión**: NexFix no es un antivirus (no tiene base de firmas). Detecta
+  comportamientos y rasgos típicos (pools/monederos en la línea de comandos,
+  procesos que imitan a Windows, inyección en herramientas .NET, uso de GPU
+  en cómputo sin ventana, persistencia rara, exclusiones del antivirus,
+  hosts manipulado) con una puntuación cuyos motivos se muestran al usuario.
+  Para la detección por firmas se apoya en Microsoft Defender (análisis
+  rápido/completo/sin conexión y análisis de un archivo concreto).
+- **Consecuencias**: puede haber falsos positivos (sobre todo herramientas
+  sin firma en segundo plano): por eso la firma válida resta puntos, solo se
+  preseleccionan los críticos, existe "Es de confianza, ignorar" y todo se
+  puede restaurar. Los pesos están en `security.rs` y se deben ajustar con
+  datos reales del PC del usuario.
+
+## D11 · Cuarentena en dos almacenes con comprobación de dueño (2026-10-06)
+
+- **Contexto**: restaurar como administrador a partir de datos que un proceso
+  del usuario puede escribir permitiría a un malware sin privilegios usar
+  NexFix para elevarse (p. ej. una tarea "restaurada" como SYSTEM).
+- **Decisión**: con admin se usa `%ProgramData%\NexFix\Cuarentena` y solo se
+  confía en archivos cuyo dueño es Administradores/SYSTEM (los archivos
+  movidos se pasan a ese dueño con `icacls`); sin admin,
+  `%LOCALAPPDATA%\NexFix\Cuarentena`, que solo restaura archivos dentro del
+  perfil y valores HKCU. Las rutas se canonicalizan (uniones) y el registro
+  solo se restaura en las claves que NexFix modifica.
+- **Consecuencias**: lo puesto en cuarentena como admin solo se restaura
+  como admin. Las suscripciones WMI eliminadas no se pueden restaurar.
+
+## D12 · `cargo run` arranca Vite (2026-10-06)
+
+- **Contexto**: con `cargo run` la app compila en modo desarrollo y carga
+  `http://localhost:1420`; sin `pnpm dev` WebView2 mostraba "localhost
+  rechazó la conexión" (le pasó al usuario).
+- **Decisión**: `devserver.rs` (solo `cfg(dev)`) arranca `pnpm dev` si el
+  puerto no responde y lo cierra al salir; si no puede, explica qué ejecutar.
+  Lo recomendado sigue siendo `pnpm tauri dev` / `cargo tauri dev`.
+
+## D13 · Vite 8 minifica con Oxc (2026-10-06)
+
+- `minify: "esbuild"` exige instalar esbuild aparte en Vite 8 y rompía
+  `pnpm build` (y por tanto `pnpm tauri build`). Se usa `minify: "oxc"`.
+
+## D14 · Capas de contenedores: nunca se borran a mano (2026-10-06)
+
+- **Contexto**: el usuario vio que `ProgramData\Microsoft\Windows\Containers\Layers`
+  "ocupa mucho" y preguntó cómo borrarlo.
+- **Decisión**: son capas de Windows Sandbox/contenedores, casi todo enlaces
+  duros a archivos de Windows (ocupan mucho menos de lo que aparentan, ver
+  D4). `safety::check_deletable` impide borrarlas desde Espacio; Espacio
+  explica qué son y Mantenimiento ofrece "Desactivar Windows Sandbox"
+  (DISM), que es la forma soportada de que Windows deje de mantenerlas.

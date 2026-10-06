@@ -105,6 +105,7 @@ pub struct ProcInfo {
     pub count: u32,
     pub memory: u64,
     pub cpu: f32,
+    pub gpu: f32,
 }
 
 #[derive(Serialize)]
@@ -119,6 +120,9 @@ pub struct LiveStats {
     pub process_count: usize,
     pub top_memory: Vec<ProcInfo>,
     pub top_cpu: Vec<ProcInfo>,
+    pub top_gpu: Vec<ProcInfo>,
+    /// Busiest GPU engine, 0-100 (None when the counters are unavailable).
+    pub gpu_total: Option<f32>,
     pub uptime_secs: u64,
 }
 
@@ -360,7 +364,7 @@ pub fn new_live_system() -> System {
     sys
 }
 
-pub fn live_stats(sys: &mut System) -> LiveStats {
+pub fn live_stats(sys: &mut System, gpu: Option<&crate::gpu::GpuSample>) -> LiveStats {
     sys.refresh_cpu_usage();
     sys.refresh_cpu_frequency();
     sys.refresh_memory();
@@ -372,27 +376,30 @@ pub fn live_stats(sys: &mut System) -> LiveStats {
 
     let cores = sys.cpus().len().max(1) as f32;
     let mut groups: HashMap<String, ProcInfo> = HashMap::new();
-    for p in sys.processes().values() {
+    for (pid, p) in sys.processes() {
         let raw = p.name().to_string_lossy();
         let name = raw.strip_suffix(".exe").unwrap_or(&raw).to_string();
         if name.is_empty() || name == "System Idle Process" {
             continue;
         }
-        let e = groups.entry(name.clone()).or_insert(ProcInfo { name, count: 0, memory: 0, cpu: 0.0 });
+        let e = groups.entry(name.clone()).or_insert(ProcInfo { name, count: 0, memory: 0, cpu: 0.0, gpu: 0.0 });
         e.count += 1;
         e.memory += p.memory();
         e.cpu += p.cpu_usage() / cores;
+        if let Some(g) = gpu.and_then(|g| g.procs.get(&pid.as_u32())) {
+            e.gpu = e.gpu.max(g.usage);
+        }
     }
     let process_count = sys.processes().len();
     let mut by_mem: Vec<ProcInfo> = groups.into_values().collect();
     by_mem.sort_unstable_by(|a, b| b.memory.cmp(&a.memory));
-    let mut top_cpu: Vec<ProcInfo> = by_mem
-        .iter()
-        .filter(|p| p.cpu > 0.05)
-        .map(|p| ProcInfo { name: p.name.clone(), count: p.count, memory: p.memory, cpu: p.cpu })
-        .collect();
+    let copy = |p: &ProcInfo| ProcInfo { name: p.name.clone(), count: p.count, memory: p.memory, cpu: p.cpu, gpu: p.gpu };
+    let mut top_cpu: Vec<ProcInfo> = by_mem.iter().filter(|p| p.cpu > 0.05).map(copy).collect();
     top_cpu.sort_unstable_by(|a, b| b.cpu.total_cmp(&a.cpu));
     top_cpu.truncate(8);
+    let mut top_gpu: Vec<ProcInfo> = by_mem.iter().filter(|p| p.gpu >= 0.5).map(copy).collect();
+    top_gpu.sort_unstable_by(|a, b| b.gpu.total_cmp(&a.gpu));
+    top_gpu.truncate(8);
     by_mem.truncate(10);
 
     LiveStats {
@@ -406,6 +413,8 @@ pub fn live_stats(sys: &mut System) -> LiveStats {
         process_count,
         top_memory: by_mem,
         top_cpu,
+        top_gpu,
+        gpu_total: gpu.filter(|g| g.available).map(|g| g.total),
         uptime_secs: System::uptime(),
     }
 }

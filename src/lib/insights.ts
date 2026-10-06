@@ -1,4 +1,4 @@
-import type { JunkCategory, MemModule, StartupItem, StorageInfo, SystemInfo, Tweaks } from "./api";
+import type { JunkCategory, MemModule, SecurityReport, StartupItem, StorageInfo, SystemInfo, Tweaks } from "./api";
 import { ago, bytes, bytesDecimal, daysSince } from "./format";
 import type { View } from "./state.svelte";
 
@@ -12,7 +12,7 @@ export interface Insight {
   /** Points removed from the 100-point health score. */
   penalty: number;
   action?: { label: string; view: View };
-  area: "rendimiento" | "almacenamiento" | "sistema" | "limpieza";
+  area: "rendimiento" | "almacenamiento" | "sistema" | "limpieza" | "seguridad";
 }
 
 /** Rated speed (MT/s) of a memory kit from its part number, when recognizable. */
@@ -122,8 +122,11 @@ export function buildInsights(
   tw: Tweaks | null,
   junk: JunkCategory[] | null,
   startup: StartupItem[] | null,
+  security: SecurityReport | null = null,
 ): Insight[] {
   const out: Insight[] = [];
+
+  if (security) out.push(...securityInsights(security));
 
   if (sys) {
     out.push(...memoryInsights(sys));
@@ -441,6 +444,61 @@ export function buildInsights(
 
   const order: Record<Level, number> = { bad: 0, warn: 1, info: 2, good: 3 };
   return out.sort((a, b) => order[a.level] - order[b.level] || b.penalty - a.penalty);
+}
+
+function securityInsights(sec: SecurityReport): Insight[] {
+  const out: Insight[] = [];
+  const open = sec.findings.filter((f) => !f.ignored);
+  const serious = open.filter((f) => f.level === "critical" || f.level === "high");
+  const medium = open.filter((f) => f.level === "medium");
+  // Each serious finding counts, but security alone never takes more than 45 points.
+  let budget = 45;
+  for (const f of serious.slice(0, 4)) {
+    const penalty = Math.min(budget, f.level === "critical" ? 25 : 15);
+    budget -= penalty;
+    out.push({
+      id: `sec-${f.id}`,
+      level: "bad",
+      penalty,
+      area: "seguridad",
+      title: f.title,
+      detail: f.summary,
+      action: { label: "Revisar", view: "security" },
+    });
+  }
+  if (serious.length > 4) {
+    out.push({
+      id: "sec-more",
+      level: "bad",
+      penalty: Math.min(budget, 5),
+      area: "seguridad",
+      title: `Y ${serious.length - 4} amenazas más`,
+      detail: "Revísalas todas en Seguridad.",
+      action: { label: "Revisar", view: "security" },
+    });
+  }
+  if (medium.length) {
+    out.push({
+      id: "sec-medium",
+      level: "warn",
+      penalty: Math.min(Math.max(0, budget), 4),
+      area: "seguridad",
+      title: `${medium.length} ${medium.length === 1 ? "elemento sospechoso" : "elementos sospechosos"} para revisar`,
+      detail: medium.slice(0, 3).map((f) => f.title).join(" · "),
+      action: { label: "Revisar", view: "security" },
+    });
+  }
+  if (!serious.length && !medium.length) {
+    out.push({
+      id: "sec-ok",
+      level: "good",
+      penalty: 0,
+      area: "seguridad",
+      title: "Sin mineros ni malware detectados",
+      detail: `Revisados ${sec.checked.processes} procesos (CPU y GPU), ${sec.checked.startup} entradas de inicio y ${sec.checked.services} servicios.`,
+    });
+  }
+  return out;
 }
 
 export function healthScore(list: Insight[]): number {

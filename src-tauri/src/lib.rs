@@ -1,11 +1,17 @@
 ﻿mod analyzer;
 mod cleaner;
+#[cfg(dev)]
+mod devserver;
 mod elevation;
 mod fswalk;
+mod gpu;
 mod maintenance;
 mod mft;
 mod nvme;
+mod quarantine;
 mod safety;
+mod security;
+mod sign;
 mod startup;
 mod storage;
 mod system;
@@ -28,11 +34,15 @@ use cleaner::{CategoryResult, CleanReport, JunkData};
 #[derive(Default)]
 struct AppState {
     live: Mutex<Option<sysinfo::System>>,
+    /// Persistent GPU counters for live stats (tried once; None if unavailable).
+    gpu: Mutex<(bool, Option<gpu::GpuQuery>)>,
     scans: Mutex<HashMap<u32, Arc<RwLock<Scan>>>>,
     scan_progress: Mutex<HashMap<u32, Arc<Progress>>>,
     next_scan: AtomicU32,
     junk: Mutex<HashMap<String, JunkData>>,
     tasks: maintenance::Running,
+    /// Findings of the last security scan (with their fix steps).
+    security: Mutex<Vec<security::Finding>>,
 }
 
 type Res<T> = Result<T, String>;
@@ -49,7 +59,7 @@ async fn fresh_thread<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static)
         let _ = tx.blocking_send(f());
     });
     let mut rx = rx;
-    rx.recv().await.ok_or_else(|| "La operaciÃ³n se interrumpiÃ³".to_string())
+    rx.recv().await.ok_or_else(|| "La operación se interrumpió".to_string())
 }
 
 // ---------- System ----------
@@ -73,9 +83,16 @@ async fn system_info() -> Res<system::SystemInfo> {
 
 #[tauri::command]
 async fn live_stats(state: State<'_, AppState>) -> Res<system::LiveStats> {
+    let gpu = {
+        let mut g = state.gpu.lock();
+        if !g.0 {
+            *g = (true, gpu::GpuQuery::open());
+        }
+        g.1.as_ref().map(|q| q.sample())
+    };
     let mut guard = state.live.lock();
     let sys = guard.get_or_insert_with(system::new_live_system);
-    Ok(system::live_stats(sys))
+    Ok(system::live_stats(sys, gpu.as_ref()))
 }
 
 #[tauri::command]
@@ -113,7 +130,7 @@ async fn junk_clean(
         ids.into_iter().filter_map(|id| junk.remove(&id).map(|d| (id, d))).collect()
     };
     if selected.is_empty() {
-        return Err("Analiza primero y selecciona al menos una categorÃ­a".into());
+        return Err("Analiza primero y selecciona al menos una categoría".into());
     }
     let excluded: HashSet<String> = excluded.into_iter().map(|p| p.to_lowercase()).collect();
     let included: HashSet<String> = included.into_iter().map(|p| p.to_lowercase()).collect();
@@ -134,7 +151,7 @@ async fn junk_clean(
 fn analyzer_start(app: AppHandle, state: State<'_, AppState>, path: String) -> Res<u32> {
     let root = PathBuf::from(path.replace('/', "\\"));
     if !root.is_dir() {
-        return Err("La ruta no es una carpeta vÃ¡lida".into());
+        return Err("La ruta no es una carpeta válida".into());
     }
     let id = state.next_scan.fetch_add(1, Ordering::Relaxed) + 1;
 
@@ -167,7 +184,7 @@ fn analyzer_cancel(state: State<'_, AppState>, id: u32) {
 }
 
 fn get_scan(state: &AppState, id: u32) -> Res<Arc<RwLock<Scan>>> {
-    state.scans.lock().get(&id).cloned().ok_or_else(|| "El anÃ¡lisis ya no estÃ¡ disponible".into())
+    state.scans.lock().get(&id).cloned().ok_or_else(|| "El análisis ya no está disponible".into())
 }
 
 #[tauri::command]
@@ -237,6 +254,63 @@ fn task_cancel(state: State<'_, AppState>, id: String) -> Res<()> {
     maintenance::cancel_task(&state.tasks, &id)
 }
 
+// ---------- Security ----------
+
+#[tauri::command]
+async fn security_scan(state: State<'_, AppState>) -> Res<security::SecurityReport> {
+    let report = blocking(|| security::scan(elevation::is_elevated(), &quarantine::ignored())).await?;
+    *state.security.lock() = report.findings.clone();
+    Ok(report)
+}
+
+#[tauri::command]
+async fn security_fix(state: State<'_, AppState>, ids: Vec<String>) -> Res<quarantine::FixReport> {
+    let selected: Vec<security::Finding> = {
+        let all = state.security.lock();
+        ids.iter().filter_map(|id| all.iter().find(|f| &f.id == id).cloned()).collect()
+    };
+    if selected.is_empty() {
+        return Err("Analiza primero y selecciona al menos una amenaza".into());
+    }
+    let report = blocking(move || quarantine::fix(selected)).await?;
+    state.security.lock().retain(|f| !report.items.iter().any(|i| i.ok && i.id == f.id));
+    Ok(report)
+}
+
+#[tauri::command]
+async fn security_ignore(key: String, ignored: bool) -> Res<()> {
+    blocking(move || quarantine::set_ignored(&key, ignored)).await?
+}
+
+#[tauri::command]
+async fn quarantine_list() -> Res<Vec<quarantine::QEntry>> {
+    blocking(quarantine::list).await
+}
+
+#[tauri::command]
+async fn quarantine_restore(id: String) -> Res<String> {
+    blocking(move || quarantine::restore(&id)).await?
+}
+
+#[tauri::command]
+async fn quarantine_delete(id: String) -> Res<()> {
+    blocking(move || quarantine::delete(&id)).await?
+}
+
+#[tauri::command]
+async fn defender_scan_file(path: String) -> Res<quarantine::DefenderScan> {
+    blocking(move || quarantine::defender_scan_file(&path)).await?
+}
+
+#[tauri::command]
+fn open_windows_security() -> Res<()> {
+    std::process::Command::new("explorer.exe")
+        .arg("windowsdefender://threat/")
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 // ---------- Tweaks & startup ----------
 
 #[tauri::command]
@@ -271,6 +345,11 @@ async fn startup_set(id: String, enabled: bool) -> Res<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let context = tauri::generate_context!();
+    // `cargo run` builds in dev mode but does not start Vite like `pnpm tauri dev`.
+    #[cfg(dev)]
+    let mut dev_server = devserver::ensure(context.config().build.dev_url.as_ref());
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
@@ -299,9 +378,23 @@ pub fn run() {
             power_plan_add_ultimate,
             startup_list,
             startup_set,
+            security_scan,
+            security_fix,
+            security_ignore,
+            quarantine_list,
+            quarantine_restore,
+            quarantine_delete,
+            defender_scan_file,
+            open_windows_security,
         ])
-        .run(tauri::generate_context!())
-        .expect("error al iniciar NexFix");
+        .build(context)
+        .expect("error al iniciar NexFix")
+        .run(move |_app, _event| {
+            #[cfg(dev)]
+            if let tauri::RunEvent::Exit = _event {
+                dev_server.stop();
+            }
+        });
 }
 
 /// Diagnostics entry point used by `cargo run --example probe`.
@@ -314,10 +407,20 @@ pub fn probe_json(what: &str, arg: &str) -> String {
         "storage" => serde_json::to_string_pretty(&storage::storage_info(admin)),
         "tweaks" => serde_json::to_string_pretty(&tweaks::get_tweaks(admin)),
         "startup" => serde_json::to_string_pretty(&startup::list()),
+        "security" => {
+            let r = security::scan(admin, &quarantine::ignored());
+            serde_json::to_string_pretty(&serde_json::json!({
+                "findings": r.findings, "resources": r.resources, "cpu": r.cpu_total, "gpu": r.gpu_total,
+                "av": r.av, "disk": r.disk, "checked": r.checked, "ms": r.elapsed_ms,
+            }))
+        }
+        "quarantine" => serde_json::to_string_pretty(&quarantine::list()),
         "live" => {
             let mut s = system::new_live_system();
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            serde_json::to_string_pretty(&system::live_stats(&mut s))
+            let q = gpu::GpuQuery::open();
+            std::thread::sleep(std::time::Duration::from_millis(1000));
+            let g = q.as_ref().map(|q| q.sample());
+            serde_json::to_string_pretty(&system::live_stats(&mut s, g.as_ref()))
         }
         "junk" => {
             let (list, _) = cleaner::scan_all();

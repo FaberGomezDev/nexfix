@@ -5,7 +5,7 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["svelte"],
+    "types": ["svelte", "vite/client"],
     "strict": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,

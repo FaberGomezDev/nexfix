@@ -39,3 +39,35 @@ abajo.
 - Game DVR activo, aceleración del ratón activa.
 - 32 GB de caché de shaders NVIDIA.
 - Hibernación activa (13,4 GB) — opcional desactivar.
+
+## 2026-10-06 — Sesión 2 (nube, sin Windows)
+
+### Pedido del usuario
+- "Seguir perfeccionando" y detectar/eliminar malware de minería que consuma
+  la gráfica o el equipo, y malware que llene el disco.
+- Mientras tanto: `cargo run` abría la ventana con "localhost rechazó la
+  conexión" y preguntó por `ProgramData\Microsoft\Windows\Containers\Layers`.
+
+### Hecho
+- Vista **Seguridad** y backend `security.rs`, `quarantine.rs`, `sign.rs`,
+  `gpu.rs` (ver arquitectura y D10-D11). Insignia con el número de amenazas
+  en la barra lateral e insights de seguridad en Resumen.
+- Resumen: anillo de GPU en vivo y pestañas RAM/CPU/GPU en "Lo que más
+  consume" (contadores PDH por proceso).
+- Mantenimiento: análisis rápido/completo/sin conexión de Defender,
+  actualizar firmas y "Desactivar Windows Sandbox" (con confirmación).
+- Espacio: explicación de las capas de contenedores y bloqueo de su borrado.
+- `devserver.rs`: `cargo run` arranca Vite (D12).
+- Correcciones: textos con codificación rota en `lib.rs` ("operaciÃ³n");
+  `pnpm check` fallaba por falta de tipos de `vite/client`; `pnpm build`
+  fallaba por `minify: "esbuild"` en Vite 8 (D13).
+
+### Verificación
+- `cargo check` y `cargo clippy` con `--target x86_64-pc-windows-msvc`
+  (también con `tauri/custom-protocol` y `--examples`), `pnpm check`,
+  `pnpm build`: sin errores.
+- La vista Seguridad y el Resumen se renderizaron en Chromium con datos
+  simulados para revisar el diseño.
+- **No probado en Windows**: sin datos reales todavía de tiempos ni falsos
+  positivos. Primer paso de la próxima sesión: `probe security` (normal y
+  admin) en el PC del usuario.

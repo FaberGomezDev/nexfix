@@ -15,7 +15,8 @@ export default defineConfig({
   },
   build: {
     target: "es2022",
-    minify: "esbuild",
+    // Vite 8 minifies with Oxc; "esbuild" would need esbuild installed separately.
+    minify: "oxc",
     cssMinify: true,
     sourcemap: false,
     chunkSizeWarningLimit: 800,

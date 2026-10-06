@@ -11,6 +11,7 @@
   import Hardware from "./lib/views/Hardware.svelte";
   import Maintenance from "./lib/views/Maintenance.svelte";
   import Optimize from "./lib/views/Optimize.svelte";
+  import Security from "./lib/views/Security.svelte";
   import Storage from "./lib/views/Storage.svelte";
 
   const nav: { id: View; label: string; icon: string; hint: string }[] = [
@@ -19,9 +20,14 @@
     { id: "storage", label: "Discos y M.2", icon: "drive", hint: "Salud SMART y TRIM" },
     { id: "cleaner", label: "Limpieza", icon: "sparkles", hint: "Temporales y cachés" },
     { id: "analyzer", label: "Espacio", icon: "pie", hint: "Qué ocupa tu disco" },
+    { id: "security", label: "Seguridad", icon: "bug", hint: "Mineros, malware y antivirus" },
     { id: "optimize", label: "Optimización", icon: "rocket", hint: "Ajustes gaming e inicio" },
     { id: "maintenance", label: "Mantenimiento", icon: "wrench", hint: "TRIM, SFC, DISM, chkdsk" },
   ];
+
+  const threatCount = $derived(
+    (app.security?.findings ?? []).filter((f) => !f.ignored && (f.level === "critical" || f.level === "high")).length,
+  );
 
   // Views stay mounted after the first visit so their state survives navigation.
   let visited = $state<Record<string, boolean>>({ dashboard: true });
@@ -61,6 +67,7 @@
         <button class="nav-item" class:active={app.view === item.id} onclick={() => go(item.id)} title={item.hint}>
           <Icon name={item.icon} size={18} />
           <span>{item.label}</span>
+          {#if item.id === "security" && threatCount}<span class="dot" title="Elementos sospechosos">{threatCount}</span>{/if}
         </button>
       {/each}
     </nav>
@@ -89,6 +96,7 @@
     {#if visited.storage}<div class="view" hidden={app.view !== "storage"}><Storage /></div>{/if}
     {#if visited.cleaner}<div class="view" hidden={app.view !== "cleaner"}><Cleaner /></div>{/if}
     {#if visited.analyzer}<div class="view" hidden={app.view !== "analyzer"}><Analyzer /></div>{/if}
+    {#if visited.security}<div class="view" hidden={app.view !== "security"}><Security /></div>{/if}
     {#if visited.optimize}<div class="view" hidden={app.view !== "optimize"}><Optimize /></div>{/if}
     {#if visited.maintenance}<div class="view" hidden={app.view !== "maintenance"}><Maintenance /></div>{/if}
   </main>
@@ -174,6 +182,19 @@
   }
   .nav-item.active :global(.icon) {
     color: var(--accent);
+  }
+  .dot {
+    margin-left: auto;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: var(--bad);
+    color: #fff;
+    font-size: 11.5px;
+    font-weight: 700;
+    display: grid;
+    place-items: center;
   }
   .side-foot {
     margin-top: auto;
