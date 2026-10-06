@@ -34,6 +34,8 @@ pub struct Node {
     pub own_files: u64,
     pub mtime: u64,
     pub denied: bool,
+    /// Virtual container layers the directory walker deliberately skips.
+    pub skipped: bool,
 }
 
 pub struct Scan {
@@ -43,6 +45,7 @@ pub struct Scan {
     pub exts: Vec<ExtStat>,
     pub errors: u64,
     pub elapsed_ms: u64,
+    pub method: &'static str,
 }
 
 #[derive(Default)]
@@ -79,6 +82,7 @@ pub struct NodeDto {
     pub dirs: u64,
     pub mtime: i64,
     pub denied: bool,
+    pub skipped: bool,
 }
 
 #[derive(Serialize)]
@@ -105,6 +109,7 @@ pub struct ScanSummary {
     pub path: String,
     pub errors: u64,
     pub elapsed_ms: u64,
+    pub method: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -134,11 +139,13 @@ struct Tmp {
     own_files: u64,
     mtime: u64,
     denied: bool,
+    skipped: bool,
     children: Vec<Tmp>,
 }
 
 struct Ctx<'a> {
     p: &'a Progress,
+    skip: Vec<String>,
     top: Mutex<BinaryHeap<Reverse<(u64, PathBuf, u64)>>>,
     top_min: AtomicU64,
     exts: Mutex<HashMap<String, (u64, u64)>>,
@@ -177,6 +184,19 @@ fn ext_of(name: &OsStr) -> Cow<'_, str> {
     }
 }
 
+/// Folders made of virtual container layers (Windows Sandbox, Docker for
+/// Windows): enumerating them is extremely slow and they are mostly hard
+/// links to files already counted elsewhere.
+fn skip_list() -> Vec<String> {
+    let mut v = Vec::new();
+    if let Some(pd) = crate::util::env_path("ProgramData") {
+        for sub in [r"Microsoft\Windows\Containers\Layers", r"Microsoft\Windows\Containers\BaseImages"] {
+            v.push(display_path(&pd.join(sub)).to_lowercase());
+        }
+    }
+    v
+}
+
 fn scan_dir(ctx: &Ctx, path: PathBuf, name: Box<str>, mtime: u64) -> Tmp {
     let mut t = Tmp {
         name,
@@ -187,9 +207,16 @@ fn scan_dir(ctx: &Ctx, path: PathBuf, name: Box<str>, mtime: u64) -> Tmp {
         own_files: 0,
         mtime,
         denied: false,
+        skipped: false,
         children: Vec::new(),
     };
     if ctx.p.cancel.load(Relaxed) {
+        return t;
+    }
+    if (t.name.eq_ignore_ascii_case("Layers") || t.name.eq_ignore_ascii_case("BaseImages"))
+        && ctx.skip.contains(&display_path(&path).to_lowercase())
+    {
+        t.skipped = true;
         return t;
     }
 
@@ -270,6 +297,7 @@ fn flatten(t: Tmp, parent: u32, nodes: &mut Vec<Node>) -> u32 {
         own_files: t.own_files,
         mtime: t.mtime,
         denied: t.denied,
+        skipped: t.skipped,
     });
     let mut kids = t.children;
     kids.sort_unstable_by(|a, b| b.size.cmp(&a.size));
@@ -278,7 +306,35 @@ fn flatten(t: Tmp, parent: u32, nodes: &mut Vec<Node>) -> u32 {
     id
 }
 
+/// `C:\` style volume roots → drive letter.
+fn volume_letter(root: &Path) -> Option<char> {
+    let s = display_path(root);
+    let s = s.trim_end_matches('\\');
+    let mut chars = s.chars();
+    let letter = chars.next()?;
+    (s.len() == 2 && letter.is_ascii_alphabetic() && chars.next() == Some(':')).then(|| letter.to_ascii_uppercase())
+}
+
+/// Whole NTFS volumes are read straight from the MFT when running as
+/// administrator; everything else uses the parallel directory walker.
 pub fn run_scan(root: PathBuf, progress: &Progress) -> Result<Scan, String> {
+    if let Some(letter) = volume_letter(&root) {
+        if crate::elevation::is_elevated() {
+            match crate::mft::scan_volume(letter, progress) {
+                Ok(scan) => return Ok(scan),
+                Err(e) if progress.cancel.load(Relaxed) => return Err(e),
+                Err(_) => {
+                    progress.files.store(0, Relaxed);
+                    progress.bytes.store(0, Relaxed);
+                    progress.dirs.store(0, Relaxed);
+                }
+            }
+        }
+    }
+    walk_scan(root, progress)
+}
+
+fn walk_scan(root: PathBuf, progress: &Progress) -> Result<Scan, String> {
     let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(8);
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads((threads * 2).clamp(4, 48))
@@ -290,6 +346,7 @@ pub fn run_scan(root: PathBuf, progress: &Progress) -> Result<Scan, String> {
     let start = Instant::now();
     let ctx = Ctx {
         p: progress,
+        skip: skip_list(),
         top: Mutex::new(BinaryHeap::with_capacity(TOP_FILES + 1)),
         top_min: AtomicU64::new(0),
         exts: Mutex::new(HashMap::new()),
@@ -332,6 +389,7 @@ pub fn run_scan(root: PathBuf, progress: &Progress) -> Result<Scan, String> {
         exts,
         errors: progress.errors.load(Relaxed),
         elapsed_ms: start.elapsed().as_millis() as u64,
+        method: "walk",
     })
 }
 
@@ -387,6 +445,7 @@ impl Scan {
             dirs: n.dirs,
             mtime: filetime_to_unix(n.mtime),
             denied: n.denied,
+            skipped: n.skipped,
         }
     }
 
@@ -397,6 +456,7 @@ impl Scan {
             path: display_path(&self.root),
             errors: self.errors,
             elapsed_ms: self.elapsed_ms,
+            method: self.method.to_string(),
         }
     }
 
@@ -650,4 +710,9 @@ pub fn delete_paths(scan: Option<Arc<RwLock<Scan>>>, paths: Vec<String>, to_recy
         }
     }
     report
+}
+
+#[doc(hidden)]
+pub fn walk_only(root: PathBuf, progress: &Progress) -> Result<Scan, String> {
+    walk_scan(root, progress)
 }

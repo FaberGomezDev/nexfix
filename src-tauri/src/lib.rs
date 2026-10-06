@@ -1,8 +1,9 @@
-mod analyzer;
+﻿mod analyzer;
 mod cleaner;
 mod elevation;
 mod fswalk;
 mod maintenance;
+mod mft;
 mod nvme;
 mod safety;
 mod startup;
@@ -48,7 +49,7 @@ async fn fresh_thread<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static)
         let _ = tx.blocking_send(f());
     });
     let mut rx = rx;
-    rx.recv().await.ok_or_else(|| "La operación se interrumpió".to_string())
+    rx.recv().await.ok_or_else(|| "La operaciÃ³n se interrumpiÃ³".to_string())
 }
 
 // ---------- System ----------
@@ -112,7 +113,7 @@ async fn junk_clean(
         ids.into_iter().filter_map(|id| junk.remove(&id).map(|d| (id, d))).collect()
     };
     if selected.is_empty() {
-        return Err("Analiza primero y selecciona al menos una categoría".into());
+        return Err("Analiza primero y selecciona al menos una categorÃ­a".into());
     }
     let excluded: HashSet<String> = excluded.into_iter().map(|p| p.to_lowercase()).collect();
     let included: HashSet<String> = included.into_iter().map(|p| p.to_lowercase()).collect();
@@ -133,7 +134,7 @@ async fn junk_clean(
 fn analyzer_start(app: AppHandle, state: State<'_, AppState>, path: String) -> Res<u32> {
     let root = PathBuf::from(path.replace('/', "\\"));
     if !root.is_dir() {
-        return Err("La ruta no es una carpeta válida".into());
+        return Err("La ruta no es una carpeta vÃ¡lida".into());
     }
     let id = state.next_scan.fetch_add(1, Ordering::Relaxed) + 1;
 
@@ -166,7 +167,7 @@ fn analyzer_cancel(state: State<'_, AppState>, id: u32) {
 }
 
 fn get_scan(state: &AppState, id: u32) -> Res<Arc<RwLock<Scan>>> {
-    state.scans.lock().get(&id).cloned().ok_or_else(|| "El análisis ya no está disponible".into())
+    state.scans.lock().get(&id).cloned().ok_or_else(|| "El anÃ¡lisis ya no estÃ¡ disponible".into())
 }
 
 #[tauri::command]
@@ -326,11 +327,27 @@ pub fn probe_json(what: &str, arg: &str) -> String {
                 .collect();
             serde_json::to_string_pretty(&brief)
         }
-        "scan" => {
+        "mftdiag" => Ok(mft::diag(arg.chars().next().unwrap_or('C'))),
+        "mftdiag2" => Ok(mft::diag2(arg.chars().next().unwrap_or('C'))),
+        "mft" => {
             let p = Progress::default();
-            match analyzer::run_scan(PathBuf::from(arg), &p) {
+            let letter = arg.chars().next().unwrap_or('C');
+            match mft::scan_volume(letter, &p) {
                 Ok(s) => serde_json::to_string_pretty(&serde_json::json!({
-                    "root": s.dto(0), "nodes": s.nodes.len(), "errors": s.errors, "ms": s.elapsed_ms,
+                    "root": s.dto(0), "nodes": s.nodes.len(), "ms": s.elapsed_ms,
+                    "top": s.top_files.iter().take(5).collect::<Vec<_>>(),
+                    "exts": s.exts.iter().take(5).collect::<Vec<_>>(),
+                    "listing_dirs": s.listing(0).map(|l| l.dirs.into_iter().take(8).map(|d| (d.name, d.size)).collect::<Vec<_>>()).unwrap_or_default(),
+                })),
+                Err(e) => Ok(format!("MFT error: {e}")),
+            }
+        }
+        "scan" | "walk" => {
+            let p = Progress::default();
+            let r = if what == "walk" { analyzer::walk_only(PathBuf::from(arg), &p) } else { analyzer::run_scan(PathBuf::from(arg), &p) };
+            match r {
+                Ok(s) => serde_json::to_string_pretty(&serde_json::json!({
+                    "root": s.dto(0), "nodes": s.nodes.len(), "errors": s.errors, "ms": s.elapsed_ms, "method": s.method,
                     "top": s.top_files.iter().take(5).collect::<Vec<_>>(),
                     "exts": s.exts.iter().take(8).collect::<Vec<_>>(),
                     "listing_dirs": s.listing(0).map(|l| l.dirs.into_iter().take(6).map(|d| (d.name, d.size)).collect::<Vec<_>>()).unwrap_or_default(),

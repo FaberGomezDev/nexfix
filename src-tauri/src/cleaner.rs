@@ -360,7 +360,17 @@ fn resolve_targets(targets: &[(PathBuf, &'static str)]) -> Vec<PathBuf> {
     out
 }
 
-fn collect_dir(dir: &Path, cutoff: u64, data: &mut JunkData, denied: &mut bool) {
+#[derive(Default)]
+struct Collected {
+    files: Vec<JunkFile>,
+    dirs: Vec<PathBuf>,
+    denied: bool,
+}
+
+/// Recursively gathers files under `dir` in parallel; sub-folders come out
+/// in post-order so empty ones can be pruned bottom-up after cleaning.
+fn collect_dir(dir: &Path, cutoff: u64) -> Collected {
+    let mut c = Collected::default();
     let mut subdirs = Vec::new();
     let res = read_dir_fast(dir, |e| {
         if e.is_dir() {
@@ -368,19 +378,27 @@ fn collect_dir(dir: &Path, cutoff: u64, data: &mut JunkData, denied: &mut bool) 
                 subdirs.push(dir.join(&e.name));
             }
         } else if cutoff == 0 || e.mtime < cutoff {
-            data.files.push(JunkFile { path: dir.join(&e.name), size: e.size, mtime: e.mtime });
+            c.files.push(JunkFile { path: dir.join(&e.name), size: e.size, mtime: e.mtime });
         }
     });
     if let Err(e) = res {
-        if e.kind() == std::io::ErrorKind::PermissionDenied {
-            *denied = true;
-        }
-        return;
+        c.denied = e.kind() == std::io::ErrorKind::PermissionDenied;
+        return c;
     }
-    for sub in subdirs {
-        collect_dir(&sub, cutoff, data, denied);
-        data.dirs.push(sub);
+    let subs: Vec<Collected> = subdirs
+        .into_par_iter()
+        .map(|sub| {
+            let mut r = collect_dir(&sub, cutoff);
+            r.dirs.push(sub);
+            r
+        })
+        .collect();
+    for r in subs {
+        c.files.extend(r.files);
+        c.dirs.extend(r.dirs);
+        c.denied |= r.denied;
     }
+    c
 }
 
 fn recycle_bin_info() -> (u64, u64) {
@@ -418,7 +436,10 @@ fn scan_category(cat: &Category) -> (CategoryResult, JunkData) {
             match std::fs::symlink_metadata(&lp) {
                 Ok(md) if md.is_dir() => {
                     found = true;
-                    collect_dir(&target, cutoff, &mut data, &mut denied);
+                    let c = collect_dir(&target, cutoff);
+                    data.files.extend(c.files);
+                    data.dirs.extend(c.dirs);
+                    denied |= c.denied;
                 }
                 Ok(md) => {
                     found = true;
